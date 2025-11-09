@@ -33,3 +33,6 @@ terraform.rc
 # Editor settings (optional)
 .vscode/
 .idea/
+
+# Reactive files
+node_modules/
