@@ -1,0 +1,100 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Deploy an API Gateway HTTP API
+
+Parameters:
+  APIName:
+    Type: String
+    Description: API Name
+  UserPoolName:
+    Type: String
+    Default: chapter4-userpool
+    Description: The name for the Cognito User Pool
+  Username:
+    Type: String
+    Description: The username for the initial user
+  UserEmail:
+    Type: String
+    Description: The email for the initial user
+
+Resources:
+  # FRONTEND
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Join
+        - "-"
+        - - "frontend-chapter-4"
+          - !Select
+            - 0
+            - !Split
+              - "-"
+              - !Select
+                - 2
+                - !Split
+                  - "/"
+                  - !Ref "AWS::StackId"
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      WebsiteConfiguration:
+        IndexDocument: index.html
+# BACKEND
+
+# DATA LAYER
+
+# AUTHENTICATION
+
+# API
+
+# 0 - TESTAUTH ROUTE
+
+# PERMISSIONS
+
+# ROUTE
+
+# 1 - HEALTHCHECK ROUTE
+
+# PERMISSIONS
+
+# LAMBDA
+
+# ROUTE
+
+# 2 - GET RECEIPES ROUTE
+
+# PERMISSIONS
+
+# LAMBDA
+
+# ROUTE
+
+# 3 - CREATE RECIPE ROUTE
+
+# PERMISSIONS
+
+# LAMBDA
+
+# ROUTE
+
+# 4 - DELETE RECIPE ROUTE
+
+# PERMISSIONS
+
+# LAMBDA
+
+# ROUTE
+
+# 5 - LIKE RECIPE ROUTE
+
+# PERMISSIONS
+
+# LAMBDA
+
+# ROUTE
+
+# OUTPUTS
+

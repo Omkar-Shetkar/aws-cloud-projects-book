@@ -34,7 +34,16 @@ terraform.rc
 .vscode/
 .idea/
 
+# Python files
+__pycache__/
+*.pyc
+.env
+.venv
+venv/
+
 # Reactive files
 node_modules/
+dist/
+build/
 
 .DS_Store
