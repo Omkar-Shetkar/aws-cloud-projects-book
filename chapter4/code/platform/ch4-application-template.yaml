@@ -103,14 +103,149 @@ Resources:
           KeyType: HASH
       BillingMode: PAY_PER_REQUEST
       TableName: recipes
-# AUTHENTICATION
+  # AUTHENTICATION
 
-# API
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Ref UserPoolName
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 6
+          RequireLowercase: false
+          RequireNumbers: false
+          RequireSymbols: false
+          RequireUppercase: false
+      MfaConfiguration: "OFF"
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+        InviteMessageTemplate:
+          EmailMessage: "Hello {username} from Recipe Sharring Serverless Application.\nYour temporary password is {####}"
+          EmailSubject: "Chapter4 - Your temporary password"
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+      Schema:
+        - Name: email
+          Required: true
+          Mutable: true
 
-# 0 - TESTAUTH ROUTE
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: my-user-pool-client
+      GenerateSecret: false
+      UserPoolId: !Ref CognitoUserPool
 
-# PERMISSIONS
+  CognitoUserPoolUser:
+    Type: AWS::Cognito::UserPoolUser
+    Properties:
+      UserAttributes:
+        - Name: email
+          Value: !Ref UserEmail
+      UserPoolId: !Ref CognitoUserPool
+      Username: !Ref Username
+      DesiredDeliveryMediums:
+        - EMAIL
+  # API
 
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Ref APIName
+      ProtocolType: HTTP
+      Description: Recipe Sharing Applicatoin - Serverless API
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+        AllowHeaders:
+          - "*"
+
+  HttpApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: dev
+      AutoDeploy: true
+
+  JWTAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref HttpApi
+      Name: CognitoAuthorizer
+      AuthorizerType: JWT
+      IdentitySource:
+        - "$request.header.Authorization"
+      JwtConfiguration:
+        Audience:
+          - !Ref CognitoUserPoolClient
+        Issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}"
+
+  # 0 - TESTAUTH ROUTE
+
+  # PERMISSIONS
+
+  LambdaExecutionAuthRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  AuthTestLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AuthTestLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Join
+        - ""
+        - - "arn:aws:execute-api:"
+          - !Ref "AWS::Region"
+          - ":"
+          - !Ref "AWS::AccountId"
+          - ":"
+          - !Ref HttpApi
+          - "/*/*"
+
+  # LAMBDA
+
+  AuthTestLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: testauth
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+
+          def lambda_handler(event, context):
+              response = {
+                  "statusCode": 200,
+                  "body": json.dumps({"message": "You've passed the authentication token"})
+              }
+              return response
+      Role: !GetAtt LambdaExecutionAuthRole.Arn
+      Timeout: 60
 # ROUTE
 
 # 1 - HEALTHCHECK ROUTE
