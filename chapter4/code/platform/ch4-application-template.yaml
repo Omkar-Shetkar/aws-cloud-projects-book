@@ -246,47 +246,590 @@ Resources:
               return response
       Role: !GetAtt LambdaExecutionAuthRole.Arn
       Timeout: 60
-# ROUTE
+  # ROUTE
 
-# 1 - HEALTHCHECK ROUTE
+  HttpAuthTestHealthRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /auth
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref HttpApiTestAuthIntegration
 
-# PERMISSIONS
+  HttpApiTestAuthIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthTestLambdaFunction.Arn}/invocations"
+      PayloadFormatVersion: "2.0"
 
-# LAMBDA
+  #1 - HEALTHCHECK ROUTE
 
-# ROUTE
+  #PERMISSIONS
 
-# 2 - GET RECEIPES ROUTE
+  LambdaExecutionHCRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
-# PERMISSIONS
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref HealthCheckLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Join
+        - ""
+        - - "arn:aws:execute-api:"
+          - !Ref "AWS::Region"
+          - ":"
+          - !Ref "AWS::AccountId"
+          - ":"
+          - !Ref HttpApi
+          - "/*/*"
 
-# LAMBDA
+  #LAMBDA
 
-# ROUTE
+  HealthCheckLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: healthcheck
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json
 
-# 3 - CREATE RECIPE ROUTE
+          def lambda_handler(event, context):
+              response = {
+                  "statusCode": 200,
+                  "body": json.dumps({"message": "Service is healthy"})
+              }
+              return response
+      Role: !GetAtt LambdaExecutionHCRole.Arn
+      Timeout: 60
 
-# PERMISSIONS
+  #ROUTE
 
-# LAMBDA
+  HttpApiHealthRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /health
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref HttpApiHealthIntegration
 
-# ROUTE
+  HttpApiHealthIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${HealthCheckLambdaFunction.Arn}/invocations"
+      PayloadFormatVersion: "2.0"
 
-# 4 - DELETE RECIPE ROUTE
+  #2 - GET RECIPES ROUTE
 
-# PERMISSIONS
+  #PERMISSIONS
 
-# LAMBDA
+  LambdaExecutionReadRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBReadAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:Scan"
+                  - "dynamodb:Query"
+                Resource:
+                  - !GetAtt RecipesTable.Arn
 
-# ROUTE
+  GetRecipesLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref GetRecipesLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Join
+        - ""
+        - - "arn:aws:execute-api:"
+          - !Ref "AWS::Region"
+          - ":"
+          - !Ref "AWS::AccountId"
+          - ":"
+          - !Ref HttpApi
+          - "/*/*"
 
-# 5 - LIKE RECIPE ROUTE
+  #LAMBDA
 
-# PERMISSIONS
+  GetRecipesLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: get-recipes
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          from typing import List, Dict
+          from decimal import Decimal
+          from boto3.dynamodb.conditions import Key
 
-# LAMBDA
+          dynamodb = boto3.resource('dynamodb')
+          table = dynamodb.Table('recipes')
 
-# ROUTE
+          class Ingredient(Dict):
+              def __init__(self, id: int, description: str):
+                  super().__init__(id=id, description=description)
 
-# OUTPUTS
+          class Step(Dict):
+              def __init__(self, id: int, description: str):
+                  super().__init__(id=id, description=description)
 
+          class Recipe(Dict):
+              def __init__(self, id: str, title: str, ingredients: List[Ingredient], steps: List[Step], likes: int):
+                  super().__init__(id=id, title=title, ingredients=ingredients, steps=steps, likes=likes)
+
+          def lambda_handler(event, context):
+              try:
+                  response = table.scan()
+                  recipes = response['Items']
+
+                  while 'LastEvaluatedKey' in response:
+                      response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
+                      recipes.extend(response['Items'])
+
+                  recipes_list = []
+                  for recipe in recipes:
+                      ingredients = [Ingredient(ing['id'], ing['description']) for ing in recipe['ingredients']]
+                      steps = [Step(step['id'], step['description']) for step in recipe['steps']]
+                      recipes_list.append(Recipe(recipe['id'], recipe['title'], ingredients, steps, recipe['likes']))
+
+                  print("--------")
+                  print(recipes_list)
+                  for i in recipes_list:
+                      print(type(i))
+                  return recipes_list
+              except Exception as e:
+                  return {"message": f"Error retrieving recipes: {e}"}
+      Role: !GetAtt LambdaExecutionReadRole.Arn
+      Timeout: 60
+
+  #ROUTE
+
+  HttpApiGetRecipesRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /recipes
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref HttpApiGetRecipesIntegration
+
+  HttpApiGetRecipesIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetRecipesLambdaFunction.Arn}/invocations"
+      PayloadFormatVersion: "2.0"
+
+  #3 - POST RECIPES ROUTE
+
+  #PERMISSIONS
+
+  LambdaExecutionCreateRecipeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBWriteAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:PutItem"
+
+                Resource:
+                  - !GetAtt RecipesTable.Arn
+
+  PostRecipeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PostRecipeLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Join
+        - ""
+        - - "arn:aws:execute-api:"
+          - !Ref "AWS::Region"
+          - ":"
+          - !Ref "AWS::AccountId"
+          - ":"
+          - !Ref HttpApi
+          - "/*/*"
+
+  #LAMBDA
+
+  PostRecipeLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: post-recipe
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+          import uuid
+          import boto3
+          from aws_lambda_powertools.utilities.parser import BaseModel
+          from typing import List, Optional
+
+          dynamodb = boto3.resource('dynamodb')
+          table = dynamodb.Table('recipes')
+
+          class Ingredient(BaseModel):
+              id: int
+              description: str
+
+          class Step(BaseModel):
+              id: int
+              description: str
+
+          class Recipe(BaseModel):
+              id:str
+              title: str
+              ingredients: List[Ingredient]
+              steps: List[Step]
+              likes: int
+
+
+          def lambda_handler(event, context):
+            try:
+              body = json.loads(event["body"])
+              recipe = Recipe(
+                id= str(uuid.uuid4()),
+                title = body["title"],
+                ingredients=body["ingredients"],
+                steps=body["steps"],
+                likes=body["likes"] 
+                )
+
+              table.put_item( Item={
+                      'id': str(uuid.uuid4()),
+                      'title': recipe.title,
+                      'ingredients':  [ingredient.dict() for ingredient in recipe.ingredients],
+                      'steps':  [steps.dict() for steps in recipe.steps],
+                      'likes': recipe.likes,
+                      }
+                      )
+              return {"message": "Recipe created successfully"}
+            except Exception as e:
+              return {"message": f"Error creating recipe: {e}"}
+
+          def create_recipe(recipe: Recipe):
+              try:
+                table.put_item(Item={
+                'id': str(uuid.uuid4()),
+                'title': recipe.title,
+                'ingredients':  [ingredient.dict() for ingredient in recipe.ingredients],
+                'steps':  [steps.dict() for steps in recipe.steps],
+                'likes': recipe.likes,
+                  })
+                return {"message": "Recipe created successfully"}
+              except Exception as e:
+                return {"message": f"Error creating recipe: {e}"}
+      Role: !GetAtt LambdaExecutionCreateRecipeRole.Arn
+      Timeout: 60
+      Layers:
+        - !Sub arn:aws:lambda:${AWS::Region}:017000801446:layer:AWSLambdaPowertoolsPythonV2:68
+
+  #ROUTE
+
+  HttpApiPostRecipeRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: POST /recipes
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref HttpApiPostRecipesIntegration
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JWTAuthorizer
+
+  HttpApiPostRecipesIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PostRecipeLambdaFunction.Arn}/invocations"
+      PayloadFormatVersion: "2.0"
+
+  #4 - DELETE RECIPES ROUTE
+
+  #PERMISSIONS
+
+  LambdaExecutionDeleteRecipeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBDeleteAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:DeleteItem"
+                Resource:
+                  - !GetAtt RecipesTable.Arn
+
+  DeleteRecipeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DeleteRecipeLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Join
+        - ""
+        - - "arn:aws:execute-api:"
+          - !Ref "AWS::Region"
+          - ":"
+          - !Ref "AWS::AccountId"
+          - ":"
+          - !Ref HttpApi
+          - "/*/*"
+
+  #LAMBDA
+
+  DeleteRecipeLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: delete-recipe
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+
+          dynamodb = boto3.resource('dynamodb')
+          table = dynamodb.Table('recipes')
+
+          def lambda_handler(event, context):
+              try:
+                  recipe_id = event['pathParameters']['recipe_id']
+                  response = table.delete_item(
+                      Key={
+                          'id': recipe_id
+                      }
+                  )
+                  return {
+                      "statusCode": 200,
+                      "body": json.dumps({"message": "Recipe deleted successfully"})
+                  }
+              except Exception as e:
+                  return {
+                      "statusCode": 500,
+                      "body": json.dumps({"message": f"Error deleting recipe: {e}"})
+                  }
+
+      Role: !GetAtt LambdaExecutionDeleteRecipeRole.Arn
+      Timeout: 60
+
+  #ROUTE
+
+  HttpApiDeleteRecipeRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: DELETE /recipes/{recipe_id}
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref HttpApiDeleteRecipeIntegration
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JWTAuthorizer
+
+  HttpApiDeleteRecipeIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteRecipeLambdaFunction.Arn}/invocations"
+      PayloadFormatVersion: "2.0"
+
+  #5 - LIKE RECIPES ROUTE
+
+  #PERMISSIONS
+
+  LambdaExecutionLikeRecipeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBUpdateAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:UpdateItem"
+
+                Resource:
+                  - !GetAtt RecipesTable.Arn
+
+  LikeRecipeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LikeRecipeLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Join
+        - ""
+        - - "arn:aws:execute-api:"
+          - !Ref "AWS::Region"
+          - ":"
+          - !Ref "AWS::AccountId"
+          - ":"
+          - !Ref HttpApi
+          - "/*/*"
+
+  #LAMBDA
+
+  LikeRecipeLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: like-recipe
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+
+          dynamodb = boto3.resource('dynamodb')
+          table = dynamodb.Table('recipes')
+
+          def lambda_handler(event, context):
+              
+              recipe_id = event['pathParameters']['recipe_id']
+              print(recipe_id)
+
+              try:
+                  response = table.update_item(
+                      Key={'id': recipe_id},
+                      UpdateExpression='SET likes = likes + :val',
+                      ExpressionAttributeValues={':val': 1},
+                      ReturnValues='UPDATED_NEW'
+                  )
+                  return {"message": "Recipe liked successfully"}
+              except Exception as e:
+                  return {"message": f"Error liking recipe: {e}"}
+      Role: !GetAtt LambdaExecutionLikeRecipeRole.Arn
+      Timeout: 60
+
+  #ROUTE
+
+  HttpApiLikeRecipeRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: PUT /recipes/like/{recipe_id}
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref HttpApiLikeRecipesIntegration
+
+  HttpApiLikeRecipesIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LikeRecipeLambdaFunction.Arn}/invocations"
+      PayloadFormatVersion: "2.0"
+
+#OUTPUTS
+
+Outputs:
+  HttpApiEndpoint:
+    Description: The endpoint of the HTTP API
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/dev"
+  UserPoolId:
+    Description: The Id of the Cognito User Pool
+    Value: !Ref CognitoUserPool
+  UserPoolClientId:
+    Description: The Id of the Cognito User Pool Client
+    Value: !Ref CognitoUserPoolClient
+  CognitoRegion:
+    Description: The AWS Region where Cognito User Pool is deployed
+    Value: !Ref "AWS::Region"
+
+  CloudFrontDistributionUrl:
+    Description: URL of the CloudFront distribution to Access your frontend
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub "${AWS::StackName}-CloudFrontDistributionUrl"
